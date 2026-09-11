@@ -24,7 +24,7 @@ options.add_argument("window-size=1920,1080")
 # options.add_argument("--disable-blink-features=AutomationControlled,IsolateOrigins,site-per-process")
 # options.add_argument("--disable-blink-features=AutomationControlled,IsolateOrigins,site-per-process,CrossSiteDocumentBlockingAlways")
 # options.add_argument("--disable-blink-features=AutomationControlled,IsolateOrigins,site-per-process,CrossSiteDocumentBlockingAlways,CrossSiteDocumentBlockingIfIsolating")
-driver = uc.Chrome(options=options)
+driver = uc.Chrome(options=options,version_main=152)
 
 driver.get("https://www.google.com")
 
@@ -40,7 +40,7 @@ query = get_random_word_or_sentence_faker(random.choice(options))
 human_simulator.input_search_query(query)
 
 # human_simulator.mouse_click()
-breakpoint()
+# breakpoint()
 
 driver.quit()
 
