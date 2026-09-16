@@ -1,7 +1,7 @@
 from faker import Faker
 from datetime import datetime
 from random import randint
-
+import src.logging.logger as logger
 
 def get_random_word_or_sentence_faker(option):
     fake = Faker()
@@ -26,3 +26,9 @@ def get_random_word_or_sentence_faker(option):
     else:
         return "Invalid option. Use 'word' or 'sentence'"
 
+def save_html(html_text,file_path):
+
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(html_text)
+    logger.info(f"--------HTML SAVED for {file_path}----------")
+    

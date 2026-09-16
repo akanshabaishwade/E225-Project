@@ -4,6 +4,7 @@ import math
 import numpy as np
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from src.logging import logger
 
 
 class HumanSimulator:
@@ -139,11 +140,120 @@ class HumanSimulator:
         toolbar_offset = 85  # approximate; calibrate for your OS/browser/zoom
         return win_pos["x"] + browser_x, win_pos["y"] + toolbar_offset + browser_y
 
-    def move_to_element_like_human(self, element, steps=None, step_delay=None):
-        location = element.location_once_scrolled_into_view
-        size = element.size
-        end_x = location["x"] + size["width"] / 2 + self._gauss(0, 2, -5, 5)
-        end_y = location["y"] + size["height"] / 2 + self._gauss(0, 2, -5, 5)
+    # def move_to_element_like_human(self, element, steps=None, step_delay=None):
+    #     location = element.location_once_scrolled_into_view
+    #     size = element.size
+    #     end_x = location["x"] + size["width"] / 2 + self._gauss(0, 2, -5, 5)
+    #     end_y = location["y"] + size["height"] / 2 + self._gauss(0, 2, -5, 5)
+
+    #     start = (self.current_x, self.current_y)
+    #     end = (end_x, end_y)
+    #     distance = math.hypot(end_x - start[0], end_y - start[1])
+
+    #     steps = steps if steps is not None else int(self._gauss(30, 6, 15, 60))
+    #     control_points = int(self._gauss(2, 0.7, 1, 3))
+    #     path = self._bezier_curve(start, end, control_points=control_points, steps=steps)
+
+    #     if step_delay is None:
+    #         delay_mean, delay_stdev = self._dynamic_move_delay(distance, steps)
+    #     else:
+    #         delay_mean, delay_stdev = step_delay, step_delay * 0.3
+
+    #     if self.use_native_cursor:
+    #         for i, (x, y) in enumerate(path):
+    #             t = self._ease_in_out(i / max(len(path) - 1, 1))
+    #             jitter_x = self._gauss(0, 0.6, -2, 2)
+    #             jitter_y = self._gauss(0, 0.6, -2, 2)
+    #             sx, sy = self._apply_screen_offset(x + jitter_x, y + jitter_y)
+    #             self.pyautogui.moveTo(sx, sy, duration=0)
+    #             step_time = delay_mean * (1.5 - abs(0.5 - t))
+    #             time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
+    #         self.current_x, self.current_y = path[-1]
+    #     else:
+    #         actions = ActionChains(self.driver)
+    #         prev_x, prev_y = start
+    #         for i, (x, y) in enumerate(path):
+    #             t = self._ease_in_out(i / max(len(path) - 1, 1))
+    #             jitter_x = self._gauss(0, 0.6, -2, 2)
+    #             jitter_y = self._gauss(0, 0.6, -2, 2)
+    #             dx = (x - prev_x) + jitter_x
+    #             dy = (y - prev_y) + jitter_y
+    #             actions.move_by_offset(dx, dy)
+    #             prev_x, prev_y = x + jitter_x, y + jitter_y
+    #             step_time = delay_mean * (1.5 - abs(0.5 - t))
+    #             time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
+    #         actions.perform()
+    #         self.current_x, self.current_y = prev_x, prev_y
+    
+    def _scroll_element_into_view(self, element, settle_checks=3, settle_delay=0.05):
+        """
+        Scrolls the element to the center of the viewport (avoids sticky headers
+        covering it) and waits for the scroll position to stop changing before
+        proceeding - scrollIntoView can be async/animated in some browsers.
+        """
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});",
+            element
+        )
+        # Wait for scroll to settle (position stable across consecutive reads)
+        last_scroll = None
+        stable_count = 0
+        for _ in range(20):  # hard cap to avoid infinite loop
+            scroll_top = self.driver.execute_script(
+                "return document.documentElement.scrollTop || document.body.scrollTop;"
+            )
+            if scroll_top == last_scroll:
+                stable_count += 1
+                if stable_count >= settle_checks:
+                    break
+            else:
+                stable_count = 0
+            last_scroll = scroll_top
+            time.sleep(settle_delay)
+
+    def _get_viewport_rect(self, element):
+        """
+        Returns the element's bounding box in VIEWPORT-relative coordinates
+        (matches what ActionChains pointer movement uses), NOT document-relative
+        coordinates (which is what element.location / location_once_scrolled_into_view
+        returns - that mismatch was the root cause of clicks landing on the wrong
+        on-screen element after scrolling).
+        """
+        rect = self.driver.execute_script(
+            "var r = arguments[0].getBoundingClientRect();"
+            "return {x: r.x, y: r.y, width: r.width, height: r.height};",
+            element
+        )
+        return rect
+
+    def _verify_pointer_target(self, x, y, expected_element):
+        """
+        Checks that the element actually under the cursor at (x, y) matches
+        (or is contained within) the intended target, using elementFromPoint -
+        the same viewport coordinate space. Returns True/False.
+        """
+        try:
+            is_match = self.driver.execute_script(
+                "var el = document.elementFromPoint(arguments[0], arguments[1]);"
+                "return el === arguments[2] || arguments[2].contains(el);",
+                x, y, expected_element
+            )
+            return bool(is_match)
+        except Exception:
+            return False  # can't verify, caller decides how to handle
+
+    def move_to_element_like_human(self, element, steps=None, step_delay=None, verify=True):
+        # Ensure element is scrolled into view and not hidden behind sticky headers,
+        # and that the scroll has actually settled before we read coordinates.
+        self._scroll_element_into_view(element)
+
+        # Use viewport-relative coordinates (getBoundingClientRect), NOT
+        # element.location / location_once_scrolled_into_view, which are
+        # document-relative and drift from the visible pointer position once
+        # the page has been scrolled.
+        rect = self._get_viewport_rect(element)
+        end_x = rect["x"] + rect["width"] / 2 + self._gauss(0, 2, -5, 5)
+        end_y = rect["y"] + rect["height"] / 2 + self._gauss(0, 2, -5, 5)
 
         start = (self.current_x, self.current_y)
         end = (end_x, end_y)
@@ -184,6 +294,18 @@ class HumanSimulator:
             actions.perform()
             self.current_x, self.current_y = prev_x, prev_y
 
+        # Sanity check: confirm the pointer actually landed on the intended
+        # element. If not (e.g. an overlay/lazy-loaded element shifted things
+        # mid-movement), re-sync coordinates once via a direct correction move.
+        if verify and not self.use_native_cursor:
+            if not self._verify_pointer_target(self.current_x, self.current_y, element):
+                rect = self._get_viewport_rect(element)  # re-fetch in case layout shifted
+                corrected_x = rect["x"] + rect["width"] / 2
+                corrected_y = rect["y"] + rect["height"] / 2
+                ActionChains(self.driver).move_by_offset(
+                    corrected_x - self.current_x, corrected_y - self.current_y
+                ).perform()
+                self.current_x, self.current_y = corrected_x, corrected_y
     # ---------- Public methods ----------
 
     def simulate_human_behavior(self, num_actions=None):
@@ -193,18 +315,39 @@ class HumanSimulator:
             action()
 
     def input_search_query(self, query, char_delay=None, think_pause=None, pre_submit_pause=None):
+
+        def click_suggestion_box():
+            try:
+                suggestions = self.driver.find_elements(By.XPATH,'//ul[@role="listbox"]/li//div[@role="presentation"]/span[not(@class)]')
+                logger.info(f"{"-"*10} Suggestion Box {"-"*10}")
+                suggestion_len = len(suggestions)
+                random_input = random.randint(0,suggestion_len - 1)
+                sugg_used = suggestions[random_input].text
+                logger.info(f"Suggestion using for this search {sugg_used}")
+                # suggestions[random_input].click()
+                self.mouse_click(suggestions[random_input])
+                logger.info(f"{"-"*10} Clicked {"-"*10}")
+                return sugg_used
+            
+            except Exception as e:
+                logger.info(f"Default Search Input Useing due to {e}")
+                return ""
+            
         search_box = self.driver.find_element(By.NAME, "q")
         self.mouse_click(search_box)
         search_box.clear()
+        # is_query_selection = random.choice([True , False])
+        input_query = query
+        logger.info(f"Query Used {input_query}")
 
-        for char in query:
+        for char in input_query:
             search_box.send_keys(char)
             delay = char_delay if char_delay is not None else self._dynamic_typing_delay(char)
             time.sleep(delay)
             if random.random() < 0.03:
                 pause = think_pause if think_pause is not None else self._dynamic_think_pause()
                 time.sleep(pause)
-
+        # query_used = click_suggestion_box() if is_query_selection else ""
         final_pause = pre_submit_pause if pre_submit_pause is not None else self._gauss(0.6, 0.2, 0.2, 1.5)
         time.sleep(final_pause)
         self.mouse_click(search_box)
