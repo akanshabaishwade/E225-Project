@@ -319,13 +319,21 @@ class HumanSimulator:
 
         def click_suggestion_box():
             try:
-                time.sleep(self._gauss(1.0, 0.2, 0.6, 1.5))
+                time.sleep(self._gauss(0.25, 0.06, 0.12, 0.4))
                 suggestions = self.driver.find_elements(
                     By.CSS_SELECTOR, 'ul[role="listbox"] li'
                 )
                 suggestions = [
                     suggestion for suggestion in suggestions
                     if suggestion.is_displayed() and suggestion.text.strip()
+                ]
+                required_words = input_query.lower().split()
+                suggestions = [
+                    suggestion for suggestion in suggestions
+                    if all(
+                        word in suggestion.text.strip().lower()
+                        for word in required_words
+                    )
                 ]
                 logger.info(f"{'-' * 10} Suggestion Box {'-' * 10}")
                 if not suggestions:
@@ -334,8 +342,11 @@ class HumanSimulator:
                 suggestion = random.choice(suggestions)
                 sugg_used = suggestion.text.strip()
                 logger.info(f"Suggestion using for this search {sugg_used}")
-                self.mouse_hover(suggestion)
-                self.mouse_click_after_hover(suggestion)
+                self.move_to_element_like_human(
+                    suggestion, steps=10, step_delay=0.01
+                )
+                time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
+                ActionChains(self.driver).click(suggestion).perform()
                 logger.info(f"{'-' * 10} Clicked {'-' * 10}")
                 return sugg_used
             
@@ -379,12 +390,18 @@ class HumanSimulator:
             if random.random() < 0.03:
                 pause = think_pause if think_pause is not None else self._dynamic_think_pause()
                 time.sleep(pause)
-        final_pause = pre_submit_pause if pre_submit_pause is not None else self._gauss(0.6, 0.2, 0.2, 1.5)
-        time.sleep(final_pause)
         query_used = click_suggestion_box()
         if query_used:
             return query_used
 
+        # No relevant suggestion appeared. Replace any typo and submit the
+        # intended query so later polling waits for the correct result page.
+        final_pause = pre_submit_pause if pre_submit_pause is not None else self._gauss(0.6, 0.2, 0.2, 1.5)
+        time.sleep(final_pause)
+        search_box.clear()
+        for char in input_query:
+            search_box.send_keys(char)
+            time.sleep(self._gauss(0.18, 0.05, 0.09, 0.35))
         self.mouse_click(search_box)
         search_box.submit()
         return input_query

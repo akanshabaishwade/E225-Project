@@ -2,7 +2,9 @@ import random
 import time
 
 import undetected_chromedriver as uc
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.common.exceptions import ElementClickInterceptedException, TimeoutException
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
@@ -17,6 +19,7 @@ ALTERNATIVE_LINK_XPATH = (
     '//*[@id="details"]/div/div[2]/div/div[1]/div[2]/div[1]/div[3]/div[2]/a/div/span'
 )
 BREADCRUMB_XPATH = '//*[@id="breadcrumbs"]/li[5]/a/span'
+LOGIN_MODAL_CLOSE_XPATH = '//*[@id="login-modal"]/div[2]/div/div[2]/button'
 
 
 def find_exact_result_link(driver, expected_text):
@@ -54,8 +57,40 @@ def switch_to_g2_page(driver):
     return False
 
 
+def close_login_modal_if_present(driver, human, timeout=1):
+    """Close G2's login modal with the mouse when it appears."""
+    try:
+        modal = WebDriverWait(driver, timeout, poll_frequency=0.1).until(
+            EC.visibility_of_element_located((By.ID, "login-modal"))
+        )
+    except TimeoutException:
+        return False
+
+    buttons = modal.find_elements(By.CSS_SELECTOR, "button")
+    visible_buttons = [button for button in buttons if button.is_displayed()]
+    if not visible_buttons:
+        close_button = driver.find_element(By.XPATH, LOGIN_MODAL_CLOSE_XPATH)
+    else:
+        # The cross is the visible button nearest the modal's top-right corner.
+        close_button = max(
+            visible_buttons,
+            key=lambda button: button.rect["x"] - button.rect["y"],
+        )
+
+    # Popup dismissal should be quick: short mouse move, tiny pause, click.
+    actions = ActionChains(driver)
+    actions.move_to_element(close_button).pause(0.05).click().perform()
+    WebDriverWait(driver, 2, poll_frequency=0.1).until(
+        EC.invisibility_of_element_located((By.ID, "login-modal"))
+    )
+    print("Closed G2 login modal")
+    return True
+
+
 def click_one_random_show_more(driver, human, wait):
     """Choose exactly one Show More control from the available G2 buttons."""
+    close_login_modal_if_present(driver, human, timeout=0.4)
+
     def show_more_buttons(current_driver):
         buttons = current_driver.find_elements(
             By.XPATH,
@@ -68,13 +103,28 @@ def click_one_random_show_more(driver, human, wait):
         ]
 
     choices = wait.until(lambda current_driver: show_more_buttons(current_driver))
-    button = random.choice(choices)
-    human.mouse_hover(button)
-    human.mouse_click_after_hover(button)
-    wait.until(
-        lambda current_driver: "Show Less" in button.text
-        or button.get_attribute("aria-expanded") == "true"
-    )
+    selected_index = random.randrange(len(choices))
+
+    for attempt in range(2):
+        choices = show_more_buttons(driver)
+        if not choices:
+            print("Show More is already expanded")
+            return
+        button = choices[min(selected_index, len(choices) - 1)]
+        human.mouse_hover(button)
+        close_login_modal_if_present(driver, human, timeout=0.4)
+        try:
+            human.mouse_click_after_hover(button)
+            WebDriverWait(driver, 5, poll_frequency=0.2).until(
+                lambda current_driver: "Show Less" in button.text
+                or button.get_attribute("aria-expanded") == "true"
+            )
+            break
+        except (ElementClickInterceptedException, TimeoutException):
+            if attempt == 1:
+                raise
+            close_login_modal_if_present(driver, human, timeout=2)
+
     print("Clicked one randomly selected Show More button")
 
 
@@ -92,6 +142,7 @@ def follow_clicked_link(driver, wait, old_url, old_handles):
 
 def explore_top_rated_alternative(driver, human, wait):
     """Explore the supplied card with the mouse, then open its alternative."""
+    close_login_modal_if_present(driver, human, timeout=0.4)
     section = wait.until(
         EC.presence_of_element_located((By.XPATH, TOP_RATED_SECTION_XPATH))
     )
@@ -124,6 +175,7 @@ def explore_top_rated_alternative(driver, human, wait):
 
 def open_fifth_breadcrumb(driver, human, wait):
     """Click the fifth breadcrumb using mouse movement and mouse click."""
+    close_login_modal_if_present(driver, human, timeout=0.4)
     breadcrumb_label = wait.until(
         EC.presence_of_element_located((By.XPATH, BREADCRUMB_XPATH))
     )
@@ -165,6 +217,7 @@ def run():
         human.mouse_click_after_hover(result_link)
         wait.until(switch_to_g2_page)
         print("Opened result:", driver.current_url)
+        close_login_modal_if_present(driver, human)
         human.move_mouse_around(moves=3)
 
         total_words = random.choice([4, 5, 6, 9])
@@ -173,10 +226,12 @@ def run():
         final_count = total_words - first_count - second_count
 
         click_one_random_show_more(driver, human, wait)
+        close_login_modal_if_present(driver, human, timeout=0.4)
         first_words = human.select_random_words(first_count)
         print("Mouse-selected on Sauce Labs page:", first_words)
         human.move_mouse_around(moves=2)
         explore_top_rated_alternative(driver, human, wait)
+        close_login_modal_if_present(driver, human, timeout=0.4)
         second_words = human.select_random_words(second_count, already_selected=first_words)
         print("Mouse-selected on Alternatives page:", second_words)
         open_fifth_breadcrumb(driver, human, wait)
