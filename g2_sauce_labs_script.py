@@ -270,28 +270,14 @@ def run():
         close_login_modal_if_present(driver, human)
         human.move_mouse_around(moves=3)
 
-        total_words = random.choice([4, 5, 6, 9])
-        first_count = random.randint(1, min(3, total_words - 2))
-        second_count = random.randint(1, min(2, total_words - first_count - 1))
-
         click_one_random_show_more(driver, human, wait)
         close_login_modal_if_present(driver, human, timeout=0.4)
-        first_words = human.select_random_words(first_count)
-        logger.info(f"Mouse-selected on Sauce Labs page: {first_words}")
+        selected_text = human.select_text_once()
+        logger.info(f"Selected text once: {selected_text}")
         human.move_mouse_around(moves=2)
         explore_top_rated_alternative(driver, human, wait)
         close_login_modal_if_present(driver, human, timeout=0.4)
-        second_words = human.select_random_words(second_count, already_selected=first_words)
-        logger.info(f"Mouse-selected on Alternatives page: {second_words}")
         open_fifth_breadcrumb(driver, human, wait)
-        final_count = total_words - len(first_words) - len(second_words)
-        final_words = human.select_random_words(
-            final_count, already_selected=first_words + second_words
-        )
-        logger.info(f"Mouse-selected after breadcrumb: {final_words}")
-        logger.info(
-            f"Total distinct words selected: {len(first_words + second_words + final_words)}"
-        )
         browsing = human.browse_g2_page()
         logger.info(f"Varied G2 browsing: {browsing}")
         time.sleep(10)

@@ -552,6 +552,43 @@ class HumanSimulator:
             )
         return selected
 
+    def select_text_once(self):
+        """Select one visible phrase containing either 4 or 10-20 words."""
+        word_count = random.choice([4, random.randint(10, 20)])
+        elements = self._visible_reading_elements()
+        random.shuffle(elements)
+
+        for element in elements:
+            if len(re.findall(r"[A-Za-z]+", element.text)) < word_count:
+                continue
+            self.mouse_hover(element)
+            selected_text = self.driver.execute_script(
+                "const root=arguments[0], count=arguments[1];"
+                "const walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT);"
+                "const candidates=[]; let node;"
+                "while(node=walker.nextNode()){"
+                "const matches=[...node.data.matchAll(/[A-Za-z]+/g)];"
+                "if(matches.length>=count) candidates.push([node,matches]);}"
+                "if(!candidates.length) return '';"
+                "const pair=candidates[Math.floor(Math.random()*candidates.length)];"
+                "const maxStart=pair[1].length-count;"
+                "const start=Math.floor(Math.random()*(maxStart+1));"
+                "const first=pair[1][start], last=pair[1][start+count-1];"
+                "const range=document.createRange();"
+                "range.setStart(pair[0],first.index);"
+                "range.setEnd(pair[0],last.index+last[0].length);"
+                "const selection=getSelection(); selection.removeAllRanges();"
+                "selection.addRange(range); return selection.toString();",
+                element,
+                word_count,
+            ) or ""
+            if len(re.findall(r"[A-Za-z]+", selected_text)) == word_count:
+                time.sleep(self._gauss(2.5, 0.6, 1.5, 4))
+                return selected_text
+
+        logger.warning(f"Could not select one visible {word_count}-word phrase")
+        return ""
+
     def browse_g2_page(self, min_seconds=75, max_seconds=150):
         """Read, hover, and occasionally inspect one image without continuous scrolling."""
         duration = random.uniform(min_seconds, max_seconds)
