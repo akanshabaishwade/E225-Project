@@ -5,6 +5,7 @@ import re
 import numpy as np
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
 from src.logging import logger
 
 
@@ -342,12 +343,29 @@ class HumanSimulator:
                 suggestion = random.choice(suggestions)
                 sugg_used = suggestion.text.strip()
                 logger.info(f"Suggestion using for this search {sugg_used}")
+                previous_url = self.driver.current_url
                 self.move_to_element_like_human(
                     suggestion, steps=10, step_delay=0.01
                 )
                 time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
                 ActionChains(self.driver).click(suggestion).perform()
                 logger.info(f"{'-' * 10} Clicked {'-' * 10}")
+
+                # Google can fill/highlight a suggestion without submitting it.
+                # Confirm results appeared; otherwise submit with Enter.
+                submitted = False
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    if (
+                        self.driver.current_url != previous_url
+                        or self.driver.find_elements(By.CSS_SELECTOR, "a[href] h3")
+                    ):
+                        submitted = True
+                        break
+                    time.sleep(0.2)
+                if not submitted:
+                    search_box.send_keys(Keys.ENTER)
+                    logger.info("Suggestion did not submit; pressed Enter")
                 return sugg_used
             
             except Exception as e:
