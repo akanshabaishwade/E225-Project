@@ -281,20 +281,16 @@ class HumanSimulator:
                 time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
             self.current_x, self.current_y = path[-1]
         else:
-            actions = ActionChains(self.driver)
-            prev_x, prev_y = start
-            for i, (x, y) in enumerate(path):
-                t = self._ease_in_out(i / max(len(path) - 1, 1))
-                jitter_x = self._gauss(0, 0.6, -2, 2)
-                jitter_y = self._gauss(0, 0.6, -2, 2)
-                dx = (x - prev_x) + jitter_x
-                dy = (y - prev_y) + jitter_y
-                actions.move_by_offset(dx, dy)
-                prev_x, prev_y = x + jitter_x, y + jitter_y
-                step_time = delay_mean * (1.5 - abs(0.5 - t))
-                time.sleep(self._gauss(step_time, delay_stdev, 0.001, None))
-            actions.perform()
-            self.current_x, self.current_y = prev_x, prev_y
+            # Sending dozens of queued pointer moves can make ChromeDriver's
+            # local HTTP command hang until its 120-second timeout. Use one
+            # real WebDriver pointer move with a small natural pause instead.
+            self.driver.execute_script(
+                "for (const type of ['mousemove','mouseover','mouseenter']) "
+                "arguments[0].dispatchEvent(new MouseEvent(type, {bubbles:true}));",
+                element,
+            )
+            time.sleep(self._gauss(0.18, 0.05, 0.08, 0.3))
+            self.current_x, self.current_y = end
 
         # Sanity check: confirm the pointer actually landed on the intended
         # element. If not (e.g. an overlay/lazy-loaded element shifted things
@@ -304,9 +300,10 @@ class HumanSimulator:
                 rect = self._get_viewport_rect(element)  # re-fetch in case layout shifted
                 corrected_x = rect["x"] + rect["width"] / 2
                 corrected_y = rect["y"] + rect["height"] / 2
-                ActionChains(self.driver).move_by_offset(
-                    corrected_x - self.current_x, corrected_y - self.current_y
-                ).perform()
+                self.driver.execute_script(
+                    "arguments[0].dispatchEvent(new MouseEvent('mousemove', {bubbles:true}));",
+                    element,
+                )
                 self.current_x, self.current_y = corrected_x, corrected_y
     # ---------- Public methods ----------
 
@@ -320,22 +317,24 @@ class HumanSimulator:
 
         def click_suggestion_box():
             try:
-                time.sleep(self._gauss(0.25, 0.06, 0.12, 0.4))
-                suggestions = self.driver.find_elements(
-                    By.CSS_SELECTOR, 'ul[role="listbox"] li'
-                )
-                suggestions = [
-                    suggestion for suggestion in suggestions
-                    if suggestion.is_displayed() and suggestion.text.strip()
-                ]
                 required_words = input_query.lower().split()
-                suggestions = [
-                    suggestion for suggestion in suggestions
-                    if all(
-                        word in suggestion.text.strip().lower()
-                        for word in required_words
+                suggestions = []
+                deadline = time.monotonic() + 2
+                while time.monotonic() < deadline and not suggestions:
+                    candidates = self.driver.find_elements(
+                        By.CSS_SELECTOR, 'ul[role="listbox"] li'
                     )
-                ]
+                    suggestions = [
+                        suggestion for suggestion in candidates
+                        if suggestion.is_displayed()
+                        and suggestion.text.strip()
+                        and all(
+                            word in suggestion.text.strip().lower()
+                            for word in required_words
+                        )
+                    ]
+                    if not suggestions:
+                        time.sleep(0.15)
                 logger.info(f"{'-' * 10} Suggestion Box {'-' * 10}")
                 if not suggestions:
                     return ""
@@ -348,7 +347,7 @@ class HumanSimulator:
                     suggestion, steps=10, step_delay=0.01
                 )
                 time.sleep(self._gauss(0.12, 0.03, 0.06, 0.2))
-                ActionChains(self.driver).click(suggestion).perform()
+                suggestion.click()
                 logger.info(f"{'-' * 10} Clicked {'-' * 10}")
 
                 # Google can fill/highlight a suggestion without submitting it.
@@ -432,7 +431,7 @@ class HumanSimulator:
         if self.use_native_cursor:
             self.pyautogui.click()
         else:
-            ActionChains(self.driver).click().perform()
+            element.click()
 
     def mouse_hover(self, element, hover_time=None):
         self.move_to_element_like_human(element)
@@ -482,7 +481,7 @@ class HumanSimulator:
     def mouse_click_after_hover(self, element):
         """Click an element that has already been reached and hovered."""
         time.sleep(self._gauss(0.4, 0.12, 0.2, 0.7))
-        ActionChains(self.driver).click(element).perform()
+        element.click()
 
     def move_mouse_around(self, moves=3):
         """Move the pointer through a few safe viewport positions."""
@@ -492,9 +491,12 @@ class HumanSimulator:
         for _ in range(moves):
             x = random.randint(round(width * 0.25), round(width * 0.75))
             y = random.randint(round(height * 0.25), round(height * 0.75))
-            ActionChains(self.driver).move_by_offset(
-                x - self.current_x, y - self.current_y
-            ).pause(self._gauss(0.3, 0.08, 0.15, 0.5)).perform()
+            self.driver.execute_script(
+                "document.dispatchEvent(new MouseEvent('mousemove', "
+                "{clientX:arguments[0], clientY:arguments[1], bubbles:true}));",
+                x, y,
+            )
+            time.sleep(self._gauss(0.3, 0.08, 0.15, 0.5))
             self.current_x, self.current_y = x, y
             self._idle_pause()
 
@@ -518,8 +520,21 @@ class HumanSimulator:
                 break
             element = random.choice(elements)
             self.mouse_hover(element)
-            ActionChains(self.driver).double_click(element).perform()
-            value = self.driver.execute_script("return getSelection().toString();") or ""
+            available_words = re.findall(r"[A-Za-z]+", element.text)
+            if not available_words:
+                continue
+            candidate = random.choice(available_words)
+            value = self.driver.execute_script(
+                "const root=arguments[0], wanted=arguments[1];"
+                "const walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT);"
+                "let node; while(node=walker.nextNode()){"
+                "const i=node.data.toLowerCase().indexOf(wanted.toLowerCase());"
+                "if(i>=0){const r=document.createRange(); r.setStart(node,i);"
+                "r.setEnd(node,i+wanted.length); const s=getSelection();"
+                "s.removeAllRanges(); s.addRange(r); return s.toString();}} return '';",
+                element,
+                candidate,
+            ) or ""
             words = re.findall(r"[A-Za-z]+", value)
             if len(words) == 1 and words[0].lower() not in seen:
                 selected.append(words[0])
@@ -570,7 +585,9 @@ class HumanSimulator:
             sx, sy = self._apply_screen_offset(self.current_x + dx, self.current_y + dy)
             self.pyautogui.moveTo(sx, sy, duration=0.1)
         else:
-            ActionChains(self.driver).move_by_offset(dx, dy).perform()
+            self.driver.execute_script(
+                "document.dispatchEvent(new MouseEvent('mousemove', {bubbles:true}));"
+            )
         self.current_x += dx
         self.current_y += dy
         time.sleep(delay if delay is not None else self._dynamic_drift_delay())
