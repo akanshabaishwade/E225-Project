@@ -501,10 +501,16 @@ class HumanSimulator:
             self._idle_pause()
 
     def _visible_reading_elements(self):
-        elements = self.driver.find_elements(By.CSS_SELECTOR, "main p, main h2, main h3")
+        elements = self.driver.find_elements(
+            By.CSS_SELECTOR,
+            "main p, main h1, main h2, main h3, "
+            "#details p, .content-card p, article p, body p, body h1, body h2, body h3",
+        )
         return self.driver.execute_script(
             "return arguments[0].filter(e => { const r=e.getBoundingClientRect(); "
-            "return r.width>0 && r.height>0 && r.top>=100 && r.bottom<innerHeight-30; });",
+            "const s=getComputedStyle(e); return r.width>0 && r.height>0 "
+            "&& r.bottom>100 && r.top<innerHeight-30 "
+            "&& s.display!=='none' && s.visibility!=='hidden'; });",
             elements,
         ) or []
 
@@ -515,15 +521,15 @@ class HumanSimulator:
         for _ in range(count * 12):
             if len(selected) == count:
                 return selected
-            elements = [e for e in self._visible_reading_elements() if len(e.text) > 20]
-            if not elements:
+            candidates = []
+            for element in self._visible_reading_elements():
+                for word in re.findall(r"[A-Za-z]{3,}", element.text):
+                    if word.lower() not in seen:
+                        candidates.append((element, word))
+            if not candidates:
                 break
-            element = random.choice(elements)
+            element, candidate = random.choice(candidates)
             self.mouse_hover(element)
-            available_words = re.findall(r"[A-Za-z]+", element.text)
-            if not available_words:
-                continue
-            candidate = random.choice(available_words)
             value = self.driver.execute_script(
                 "const root=arguments[0], wanted=arguments[1];"
                 "const walker=document.createTreeWalker(root, NodeFilter.SHOW_TEXT);"
@@ -541,7 +547,9 @@ class HumanSimulator:
                 seen.add(words[0].lower())
             time.sleep(self._gauss(2.0, 0.5, 1.0, 3.2))
         if len(selected) != count:
-            raise RuntimeError(f"Selected {len(selected)} of {count} requested words")
+            logger.warning(
+                f"Selected {len(selected)} of {count} requested words; continuing"
+            )
         return selected
 
     def browse_g2_page(self, min_seconds=75, max_seconds=150):

@@ -273,7 +273,6 @@ def run():
         total_words = random.choice([4, 5, 6, 9])
         first_count = random.randint(1, min(3, total_words - 2))
         second_count = random.randint(1, min(2, total_words - first_count - 1))
-        final_count = total_words - first_count - second_count
 
         click_one_random_show_more(driver, human, wait)
         close_login_modal_if_present(driver, human, timeout=0.4)
@@ -285,6 +284,7 @@ def run():
         second_words = human.select_random_words(second_count, already_selected=first_words)
         logger.info(f"Mouse-selected on Alternatives page: {second_words}")
         open_fifth_breadcrumb(driver, human, wait)
+        final_count = total_words - len(first_words) - len(second_words)
         final_words = human.select_random_words(
             final_count, already_selected=first_words + second_words
         )
